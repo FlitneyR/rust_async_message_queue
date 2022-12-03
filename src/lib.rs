@@ -1,4 +1,7 @@
-use std::{sync::{Arc, Mutex}, ops::{AddAssign, SubAssign}};
+use std::{
+    sync::{Arc, Mutex},
+    ops::{AddAssign, SubAssign}
+};
 
 #[cfg(test)]
 mod tests;
@@ -56,6 +59,16 @@ impl MsgQueueState {
     }
 }
 
+#[derive(PartialEq, Debug)]
+pub enum MsgQueueError {
+    NoLock,
+    NoMessages,
+    QueueClosed,
+    NegativeWriters,
+    QueueTerminated,
+    EndOfTransmission,
+} use MsgQueueError::*;
+
 pub struct AsyncMsgQueue<T> {
     queue: Mutex<Queue<Option<T>>>,
     state: Mutex<MsgQueueState>,
@@ -71,16 +84,17 @@ impl<T> AsyncMsgQueue<T> {
         }
     }
 
-    pub fn register_writer(&self) -> Option<()> {
+    pub fn register_writer(&self) -> Result<(), MsgQueueError> {
         self.writers
-            .lock().ok()?
+            .lock().map_err(|_| NoLock)?
             .add_assign(1);
 
-        Some(())
+        Ok(())
     }
 
-    pub fn deregister_writer(&self) -> Option<()> {
-        let mut lock = self.writers.lock().ok()?;
+    pub fn deregister_writer(&self) -> Result<(), MsgQueueError> {
+        let mut lock = self.writers
+            .lock().map_err(|_| NoLock)?;
 
         lock.sub_assign(1);
 
@@ -88,91 +102,87 @@ impl<T> AsyncMsgQueue<T> {
             self.close()?
         }
 
-        Some(())
+        Ok(())
     }
 
     pub fn new_arc() -> Arc<Self> { Arc::new(Self::new()) }
 
-    pub fn is_closed(&self) -> Option<bool> {
+    pub fn is_closed(&self) -> Result<bool, MsgQueueError> {
         self.can_send().map(|v| !v)
     }
 
-    pub fn is_terminated(&self) -> Option<bool> {
+    pub fn is_terminated(&self) -> Result<bool, MsgQueueError> {
         self.can_read().map(|v| !v)
     }
 
-    pub fn can_send(&self) -> Option<bool> {
-        Some(self.state.lock().ok()?.can_send())
+    pub fn can_send(&self) -> Result<bool, MsgQueueError> {
+        Ok(self.state.lock().map_err(|_| NoLock)?.can_send())
     }
 
-    pub fn can_read(&self) -> Option<bool> {
-        Some(self.state.lock().ok()?.can_read())
+    pub fn can_read(&self) -> Result<bool, MsgQueueError> {
+        Ok(self.state.lock().map_err(|_| NoLock)?.can_read())
     }
 
     /// Prevent any readers from reading any more messages
-    pub fn terminate(&self) -> Option<()> {
-        Some(self.state.lock().ok()?.terminate())
+    pub fn terminate(&self) -> Result<(), MsgQueueError> {
+        Ok(self.state.lock().map_err(|_| NoLock)?.terminate())
     }
 
     /// Prevent any writers from sending any more messages
-    fn close(&self) -> Option<()> {
-        if self.is_closed()? { return Some(()) }
+    fn close(&self) -> Result<(), MsgQueueError> {
+        if self.is_closed()? { return Err(QueueClosed) }
 
         self.queue
-            .lock().ok()?
+            .lock().map_err(|_| NoLock)?
             .push(None);
 
         self.state
-            .lock().ok()?
+            .lock().map_err(|_| NoLock)?
             .close();
 
-        Some(())
+        Ok(())
     }
 
     /// Enqueues a message
-    pub fn send(&self, t: T) -> Option<()> {
-        if !self.can_send()? { return None }
+    pub fn send(&self, t: T) -> Result<(), MsgQueueError> {
+        if !self.can_send()? { return Err(QueueClosed) }
 
         self.queue
-            .lock().ok()?
+            .lock().map_err(|_| NoLock)?
             .push(Some(t));
-        Some(())
+        Ok(())
     }
 
-    fn pop(&self) -> Option<Option<T>> {
-        if self.is_terminated()? { return None }
+    fn pop(&self) -> Result<T, MsgQueueError> {
+        if self.is_terminated()? { return Err(QueueTerminated) }
 
         let temp = self.queue
-            .lock().ok()?
+            .lock().map_err(|_| NoLock)?
             .pop();
 
         match temp {
-            Some(None) => { self.terminate()?; None },
-            _ => temp
+            None => Err(NoMessages),
+            Some(None) => { self.terminate()?; Err(EndOfTransmission) },
+            Some(Some(v)) => Ok(v)
         }
     }
 
     /// Reads the next message from the queue
     /// 
     /// If there are no messages, this function will busy wait for one
-    pub fn read(&self) -> Option<T> {
+    pub fn read(&self) -> Result<T, MsgQueueError> {
         let mut temp;
         while {
             temp = self.pop();
-            self.can_read()? && temp.is_none()
+
+            match temp {
+                Ok(_) => false,
+                Err(EndOfTransmission) => false,
+                Err(QueueTerminated) => false,
+                _ => true
+            }
         } { /* busy wait */ }
 
-        match temp {
-            None => None, // queue was closed
-            Some(v) => v  // message was recieved
-        }
-    }
-}
-
-impl<T> Iterator for AsyncMsgQueue<T> {
-    type Item = T;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.read()
+        temp
     }
 }
