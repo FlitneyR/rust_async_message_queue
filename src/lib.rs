@@ -59,6 +59,7 @@ impl MsgQueueState {
     }
 }
 
+// TODO: add more information to MsgQueueError
 #[derive(PartialEq, Debug)]
 pub enum MsgQueueError {
     NoLock,
@@ -69,6 +70,20 @@ pub enum MsgQueueError {
     EndOfTransmission,
 } use MsgQueueError::*;
 
+impl MsgQueueError {
+    pub fn to_string(&self) -> String {
+        match self {
+            NoLock => "Failed to get mutex lock".into(),
+            NoMessages => "No messages to read".into(),
+            QueueClosed => "Cannot send to closed queue".into(),
+            NegativeWriters => "Cannot have fewer than 1 writers to a queue".into(),
+            QueueTerminated => "Cannot read from terminated queue".into(),
+            EndOfTransmission => "Message queue reached end of transmission".into(),
+        }
+    }
+}
+
+// TODO: Add names to message queues
 pub struct AsyncMsgQueue<T> {
     queue: Mutex<Queue<Option<T>>>,
     state: Mutex<MsgQueueState>,
