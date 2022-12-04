@@ -85,7 +85,7 @@ impl MsgQueueError {
 
 // TODO: Add names to message queues
 pub struct AsyncMsgQueue<T> {
-    queue: Mutex<Queue<Option<T>>>,
+    queue: Mutex<Queue<T>>,
     state: Mutex<MsgQueueState>,
     writers: Mutex<usize>,
 }
@@ -188,10 +188,6 @@ impl<T> AsyncMsgQueue<T> {
     fn close(&self) -> Result<(), MsgQueueError> {
         if self.is_closed()? { return Err(QueueClosed) }
 
-        self.queue
-            .lock().map_err(|_| NoLock)?
-            .push(None);
-
         self.state
             .lock().map_err(|_| NoLock)?
             .close();
@@ -205,7 +201,8 @@ impl<T> AsyncMsgQueue<T> {
 
         self.queue
             .lock().map_err(|_| NoLock)?
-            .push(Some(t));
+            .push(t);
+        
         Ok(())
     }
 
@@ -217,9 +214,13 @@ impl<T> AsyncMsgQueue<T> {
             .pop();
 
         match temp {
-            None => Err(NoMessages),
-            Some(None) => { self.terminate()?; Err(EndOfTransmission) },
-            Some(Some(v)) => Ok(v)
+            Some(v) => Ok(v),
+            None => if self.is_closed()? {
+                self.terminate()?;
+                Err(EndOfTransmission)
+            } else {
+                Err(NoMessages)
+            },
         }
     }
 
