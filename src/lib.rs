@@ -1,6 +1,6 @@
 use std::{
-    sync::{Arc, Mutex},
-    ops::{AddAssign, SubAssign}
+    sync::{ Arc, Mutex },
+    ops::{ AddAssign, SubAssign }
 };
 
 #[cfg(test)]
@@ -186,18 +186,12 @@ impl<T> AsyncMsgQueue<T> {
     /// 
     /// If there are no messages, this function will busy wait for one
     pub fn read(&self) -> Result<T, MsgQueueError> {
-        let mut temp;
-        while {
-            temp = self.pop();
-
-            match temp {
-                Ok(_) => false,
-                Err(EndOfTransmission) => false,
-                Err(QueueTerminated) => false,
-                _ => true
+        loop {
+            match self.pop() {
+                Err(NoMessages) => { /* busy wait */ },
+                Ok(v) => return Ok(v),
+                Err(e) => return Err(e)
             }
-        } { /* busy wait */ }
-
-        temp
+        }
     }
 }
