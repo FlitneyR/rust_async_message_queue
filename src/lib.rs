@@ -6,24 +6,24 @@ use std::{
 #[cfg(test)]
 mod tests;
 
-pub struct Queue<T> {
+struct Queue<T> {
     vec: Vec<T>
 }
 
 impl<T> Queue<T> {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self { vec: Vec::new() }
     }
 
-    pub fn push(&mut self, t: T) {
+    fn push(&mut self, t: T) {
         self.vec.insert(0, t)
     }
 
-    pub fn pop(&mut self) -> Option<T> {
+    fn pop(&mut self) -> Option<T> {
         self.vec.pop()
     }
 
-    pub fn peek(&mut self) -> Option<&T> {
+    fn peek(&mut self) -> Option<&T> {
         self.vec.get(self.vec.len())
     }
 }
@@ -33,7 +33,7 @@ impl<T> Queue<T> {
 /// - Closed - The message queue can recieve no more messages
 /// - Terminated - The message queue has been closed and all the messages have been read
 #[derive(PartialEq)]
-pub enum MsgQueueState {
+enum MsgQueueState {
     Open,
     Closed,
     Terminated,
@@ -42,11 +42,11 @@ pub enum MsgQueueState {
 impl MsgQueueState {
     pub fn new() -> Self { Self::Open }
 
-    pub fn close(&mut self) {
+    fn close(&mut self) {
         *self = Self::Closed
     }
 
-    pub fn terminate(&mut self) {
+    fn terminate(&mut self) {
         *self = Self::Terminated
     }
 
@@ -90,6 +90,48 @@ pub struct AsyncMsgQueue<T> {
     writers: Mutex<usize>,
 }
 
+/// ```
+/// use async_msg_queue::{
+///     AsyncMsgQueue,
+///     MsgQueueError::*
+/// };
+/// 
+/// let queue = AsyncMsgQueue::<String>::new_arc();
+/// 
+/// let reader = queue.clone();
+/// let writer = queue.clone();
+/// 
+/// let thread_handle = std::thread::spawn(move || {
+///     let mut messages = vec![];
+/// 
+///     loop {
+///         match reader.read() {
+///             Ok(msg) => messages.push(msg),
+///             Err(EndOfTransmission) |
+///             Err(QueueTerminated) => return Ok(messages),
+///             Err(e) => return Err(e)
+///         }
+///     }
+/// });
+/// 
+/// let messages = vec!["msg1".into(), "msg2".into(), "msg3".into()];
+/// 
+/// assert_eq!(writer.register_writer(), Ok(()));
+/// 
+/// for message in messages.clone() {
+///     assert_eq!(writer.send(message), Ok(()));
+/// }
+/// 
+/// assert_eq!(writer.deregister_writer(), Ok(()));
+/// 
+/// let result = thread_handle.join();
+/// 
+/// assert!(result.is_ok());
+/// 
+/// let result = result.unwrap();
+/// 
+/// assert_eq!(result, Ok(messages))
+/// ```
 impl<T> AsyncMsgQueue<T> {
     pub fn new() -> Self {
         Self {
@@ -138,8 +180,7 @@ impl<T> AsyncMsgQueue<T> {
         Ok(self.state.lock().map_err(|_| NoLock)?.can_read())
     }
 
-    /// Prevent any readers from reading any more messages
-    pub fn terminate(&self) -> Result<(), MsgQueueError> {
+    fn terminate(&self) -> Result<(), MsgQueueError> {
         Ok(self.state.lock().map_err(|_| NoLock)?.terminate())
     }
 
