@@ -22,13 +22,17 @@ pub fn one_writer_one_reader() {
 
     let messages = vec!["msg1".into(), "msg2".into(), "msg3".into()];
 
-    assert_eq!(writer.register_writer(), Ok(()));
+    let writer_handle = writer.register_writer();
+
+    assert!(writer_handle.is_ok());
+
+    let writer_handle = writer_handle.unwrap();
 
     for message in messages.clone() {
-        assert_eq!(writer.send(message), Ok(()));
+        assert_eq!(writer.send(writer_handle, message), Ok(()));
     }
 
-    assert_eq!(writer.deregister_writer(), Ok(()));
+    assert_eq!(writer.deregister_writer(writer_handle), Ok(()));
 
     let result = thread_handle.join();
 
@@ -73,13 +77,17 @@ pub fn one_writer_two_readers() {
 
     let arr: Vec<usize> = (0..100).collect();
 
-    assert_eq!(writer.register_writer(), Ok(()));
+    let writer_handle = writer.register_writer();
+
+    assert!(writer_handle.is_ok());
+
+    let writer_handle = writer_handle.unwrap();
 
     for n in arr.clone() {
-        assert_eq!(writer.send(n), Ok(()));
+        assert_eq!(writer.send(writer_handle, n), Ok(()));
     }
 
-    assert_eq!(writer.deregister_writer(), Ok(()));
+    assert_eq!(writer.deregister_writer(writer_handle), Ok(()));
 
     let result1 = handle1.join();
     let result2 = handle2.join();
@@ -122,25 +130,31 @@ pub fn two_writers_one_reader() {
     let arr1 = vec![1, 2, 3];
     let arr2 = vec![4, 5, 6];
 
-    assert_eq!(writer1.register_writer(), Ok(()));
-    assert_eq!(writer2.register_writer(), Ok(()));
+    let writer1_handle = writer1.register_writer();
+    let writer2_handle = writer2.register_writer();
+
+    assert!(writer1_handle.is_ok());
+    assert!(writer2_handle.is_ok());
+
+    let writer1_handle = writer1_handle.unwrap();
+    let writer2_handle = writer2_handle.unwrap();
 
     std::thread::spawn(move || {
         for n in arr1 {
-            writer1.send(n)?;
+            writer1.send(writer1_handle, n)?;
         }
 
-        writer1.deregister_writer()?;
+        writer1.deregister_writer(writer1_handle)?;
 
         Ok::<(), MsgQueueError>(())
     });
 
     std::thread::spawn(move || {
         for n in arr2 {
-            writer2.send(n)?;
+            writer2.send(writer2_handle, n)?;
         }
 
-        writer2.deregister_writer()?;
+        writer2.deregister_writer(writer2_handle)?;
 
         Ok::<(), MsgQueueError>(())
     });
@@ -166,8 +180,14 @@ pub fn two_writers_two_readers() {
     let reader1 = queue.clone();
     let reader2 = queue.clone();
 
-    assert_eq!(writer1.register_writer(), Ok(()));
-    assert_eq!(writer2.register_writer(), Ok(()));
+    let writer1_handle = writer1.register_writer();
+    let writer2_handle = writer2.register_writer();
+
+    assert!(writer1_handle.is_ok());
+    assert!(writer2_handle.is_ok());
+
+    let writer1_handle = writer1_handle.unwrap();
+    let writer2_handle = writer2_handle.unwrap();
 
     let reader_handle1 = std::thread::spawn(move || {
         let mut acc = 0;
@@ -197,20 +217,20 @@ pub fn two_writers_two_readers() {
 
     std::thread::spawn(move || {
         for n in vec![1, 2, 3] {
-            writer1.send(n)?;
+            writer1.send(writer1_handle, n)?;
         }
 
-        writer1.deregister_writer()?;
+        writer1.deregister_writer(writer1_handle)?;
 
         Ok::<(), MsgQueueError>(())
     });
 
     std::thread::spawn(move || {
         for n in vec![4, 5, 6] {
-            writer2.send(n)?;
+            writer2.send(writer2_handle, n)?;
         }
 
-        writer2.deregister_writer()?;
+        writer2.deregister_writer(writer2_handle)?;
 
         Ok::<(), MsgQueueError>(())
     });

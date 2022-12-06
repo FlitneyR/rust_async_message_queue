@@ -1,7 +1,5 @@
-use std::{
-    sync::{ Arc, Mutex },
-    ops::{ AddAssign, SubAssign }
-};
+use rand::Rng;
+use std::sync::{ Arc, Mutex };
 
 #[cfg(test)]
 mod tests;
@@ -21,10 +19,6 @@ impl<T> Queue<T> {
 
     fn pop(&mut self) -> Option<T> {
         self.vec.pop()
-    }
-
-    fn peek(&mut self) -> Option<&T> {
-        self.vec.get(self.vec.len())
     }
 }
 
@@ -65,6 +59,7 @@ pub enum MsgQueueError {
     NoLock,
     NoMessages,
     QueueClosed,
+    UnknownWriter,
     NegativeWriters,
     QueueTerminated,
     EndOfTransmission,
@@ -76,6 +71,7 @@ impl MsgQueueError {
             NoLock => "Failed to get mutex lock".into(),
             NoMessages => "No messages to read".into(),
             QueueClosed => "Cannot send to closed queue".into(),
+            UnknownWriter => "Unrecognised writer".into(),
             NegativeWriters => "Cannot have fewer than 1 writers to a queue".into(),
             QueueTerminated => "Cannot read from terminated queue".into(),
             EndOfTransmission => "Message queue reached end of transmission".into(),
@@ -83,11 +79,13 @@ impl MsgQueueError {
     }
 }
 
+type WriterID = usize;
+
 // TODO: Add names to message queues
 pub struct AsyncMsgQueue<T> {
     queue: Mutex<Queue<T>>,
     state: Mutex<MsgQueueState>,
-    writers: Mutex<usize>,
+    writers: Mutex<Vec<WriterID>>,
 }
 
 /// ```
@@ -116,13 +114,17 @@ pub struct AsyncMsgQueue<T> {
 /// 
 /// let messages = vec!["msg1".into(), "msg2".into(), "msg3".into()];
 /// 
-/// assert_eq!(writer.register_writer(), Ok(()));
+/// let writer_handle = writer.register_writer();
+/// 
+/// assert!(writer_handle.is_ok());
+/// 
+/// let writer_handle = writer_handle.unwrap();
 /// 
 /// for message in messages.clone() {
-///     assert_eq!(writer.send(message), Ok(()));
+///     assert_eq!(writer.send(writer_handle, message), Ok(()));
 /// }
 /// 
-/// assert_eq!(writer.deregister_writer(), Ok(()));
+/// assert_eq!(writer.deregister_writer(writer_handle), Ok(()));
 /// 
 /// let result = thread_handle.join();
 /// 
@@ -137,25 +139,46 @@ impl<T> AsyncMsgQueue<T> {
         Self {
             queue: Mutex::new(Queue::new()),
             state: Mutex::new(MsgQueueState::new()),
-            writers: Mutex::new(0)
+            writers: Mutex::new(Vec::new())
         }
     }
 
-    pub fn register_writer(&self) -> Result<(), MsgQueueError> {
-        self.writers
-            .lock().map_err(|_| NoLock)?
-            .add_assign(1);
-
-        Ok(())
+    fn new_writer_id(&self) -> WriterID {
+        rand::thread_rng().gen()
     }
 
-    pub fn deregister_writer(&self) -> Result<(), MsgQueueError> {
-        let mut lock = self.writers
+    fn check_writer(&self, id: WriterID) -> Result<(), MsgQueueError> {
+        if self.writers
+            .lock().map_err(|_| NoLock)?
+            .contains(&id)
+        {
+            Ok(())
+        } else {
+            Err(UnknownWriter)
+        }
+    }
+
+    pub fn register_writer(&self) -> Result<WriterID, MsgQueueError> {
+        let id = self.new_writer_id();
+
+        self.writers
+            .lock().map_err(|_| NoLock)?
+            .push(id);
+
+        Ok(id)
+    }
+
+    pub fn deregister_writer(&self, id: WriterID) -> Result<(), MsgQueueError> {
+        let mut writers = self.writers
             .lock().map_err(|_| NoLock)?;
 
-        lock.sub_assign(1);
+        let index = writers.iter()
+            .position(|&writer| writer == id)
+            .ok_or(UnknownWriter)?;
 
-        if lock.eq(&0) {
+        writers.remove(index);
+
+        if writers.is_empty() {
             self.close()?
         }
 
@@ -196,24 +219,25 @@ impl<T> AsyncMsgQueue<T> {
     }
 
     /// Enqueues a message
-    pub fn send(&self, t: T) -> Result<(), MsgQueueError> {
+    pub fn send(&self, id: WriterID, t: T) -> Result<(), MsgQueueError> {
+        self.check_writer(id)?;
+
         if !self.can_send()? { return Err(QueueClosed) }
 
         self.queue
             .lock().map_err(|_| NoLock)?
             .push(t);
-        
+
         Ok(())
     }
 
     fn pop(&self) -> Result<T, MsgQueueError> {
         if self.is_terminated()? { return Err(QueueTerminated) }
 
-        let temp = self.queue
-            .lock().map_err(|_| NoLock)?
-            .pop();
+        let mut lock = self.queue
+            .lock().map_err(|_| NoLock)?;
 
-        match temp {
+        match lock.pop() {
             Some(v) => Ok(v),
             None => if self.is_closed()? {
                 self.terminate()?;
@@ -230,9 +254,9 @@ impl<T> AsyncMsgQueue<T> {
     pub fn read(&self) -> Result<T, MsgQueueError> {
         loop {
             match self.pop() {
-                Err(NoMessages) => { /* busy wait */ },
+                Err(NoMessages) => continue,
                 Ok(v) => return Ok(v),
-                Err(e) => return Err(e)
+                Err(e) => return Err(e),
             }
         }
     }
